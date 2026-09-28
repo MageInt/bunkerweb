@@ -5,7 +5,7 @@ from contextlib import suppress
 from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime
-from gc import collect
+from gc import collect, freeze
 from io import BytesIO
 from json import load as json_load
 from logging import Logger
@@ -1408,6 +1408,7 @@ if __name__ == "__main__":
         changes = {}
         old_changes = {}
         healthcheck_job_run = False
+        gc_frozen = False
         pre_push_retry_at = None
         pre_push_deferrals = 0
         configs_rescan_at = None
@@ -1675,11 +1676,19 @@ if __name__ == "__main__":
                 schedule_every(HEALTHCHECK_INTERVAL).seconds.do(healthcheck_job)
                 healthcheck_job_run = True
 
+            # Applying changes (jobs, render, push) is what leaves reference cycles behind, so collect
+            # once here instead of on a timer in the loop below: a full collection walks the whole heap
+            # and showed up as a CPU spike every 10s. On the first pass, freeze what survives (imports,
+            # the scheduler, the database engine) so later automatic collections stop rescanning it.
+            collect()
+            if not gc_frozen:
+                freeze()
+                gc_frozen = True
+
             # infinite schedule for the jobs
             LOGGER.info("Executing job scheduler ...")
             pre_push_retry_at = monotonic() + PENDING_RETRY_DELAY if pre_push_failed else None
             errors = 0
-            _gc_counter = 0
             while RUN and not NEED_RELOAD:
                 try:
                     # SIGHUP: re-read /etc/bunkerweb/configs before the folder gets regenerated
@@ -1715,10 +1724,6 @@ if __name__ == "__main__":
                     sleep(3 if SCHEDULER.db.readonly else 1)
                     run_pending()
                     SCHEDULER.run_pending()
-                    _gc_counter += 1
-                    if _gc_counter >= 10:
-                        collect()
-                        _gc_counter = 0
                     # The lock is only a barrier against a running bwcli save/restore: take it,
                     # read the metadata, release it right away (never held across the loop body).
                     try:
