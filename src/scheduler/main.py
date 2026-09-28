@@ -1788,9 +1788,10 @@ if __name__ == "__main__":
                         NEED_RELOAD = True
 
                     # check if the config have changed since last time
+                    # plugins_config_changed maps each changed plugin to its last change date, so
+                    # comparing it is enough: there is no separate last_plugins_config_change field.
                     if changes["plugins_config_changed"] and (
                         not SCHEDULER.db.readonly
-                        or not changes["last_plugins_config_change"]
                         or not old_changes
                         or old_changes["plugins_config_changed"] != changes["plugins_config_changed"]
                     ):
